@@ -1,0 +1,77 @@
+name: maven build
+
+# The build every lolaf-org Maven repository runs on push and pull request. Called, never run here:
+#
+#   jobs:
+#     build:
+#       uses: lolaf-org/workflows/.github/workflows/maven-build.yml@v1.0.0
+#
+# The check this reports is named `<caller job> / build`, so a caller whose job is `build` reports
+# `build / build`, and that - not `build` - is the name branch protection has to require.
+
+on:
+  workflow_call:
+    inputs:
+      java-version:
+        description: 'The JDK Maven runs on'
+        type: string
+        default: '21'
+      toolchain-jdks:
+        description: >-
+          Extra JDKs to provision for maven-toolchains, one per line. Empty for a repository whose
+          modules all build on the JDK Maven runs on.
+        type: string
+        default: ''
+      timeout-minutes:
+        description: 'Job ceiling; sized for a cold runner, not for the work'
+        type: number
+        default: 20
+      maven-args:
+        description: 'The whole mvn command line after `mvn`'
+        type: string
+        default: '-B -T 1C clean install'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # Modules that compile against JDK internals which moved between releases build through a
+      # toolchain. Listing their JDKs here is what writes the ~/.m2/toolchains.xml they resolve against,
+      # so a JDK dropped from a caller's list breaks those modules rather than skipping them.
+      - if: inputs.toolchain-jdks != ''
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.toolchain-jdks }}
+
+      # Last, so that this is the JDK left on PATH and JAVA_HOME for Maven itself.
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+
+      # Not MAVEN_ARGS: Maven 3.9 reads that variable itself and would apply the arguments twice.
+      - name: Build and test
+        env:
+          BUILD_ARGS: ${{ inputs.maven-args }}
+        run: |
+          # shellcheck disable=SC2086 # splitting BUILD_ARGS into words is the point
+          mvn $BUILD_ARGS
+
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          retention-days: 7
+          if-no-files-found: ignore

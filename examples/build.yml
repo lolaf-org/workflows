@@ -1,0 +1,24 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+# A superseded run on a pull request is not worth runner minutes, but every commit landing on main gets verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  # Reports the check `build / build`, which is what branch protection on main must require.
+  build:
+    uses: lolaf-org/workflows/.github/workflows/maven-build.yml@v1.0.0
+    # Everything below is optional; these are the defaults.
+    with:
+      java-version: '21'
+      toolchain-jdks: ''
+      timeout-minutes: 20
