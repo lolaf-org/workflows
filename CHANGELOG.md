@@ -5,7 +5,7 @@ All notable changes to these workflows are recorded here, in the format of
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). For a workflow, a breaking change is a removed or
 renamed input or secret, or a changed check name.
 
-## [1.0.0] - unreleased
+## [1.0.0] - 2026-09-16
 
 First version, factored out of the copies ringos, betty and staffix each carried.
 
