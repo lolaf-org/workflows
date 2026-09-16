@@ -1,0 +1,41 @@
+name: dependabot auto-merge
+
+# Turns on GitHub's auto-merge for Dependabot's own pull requests. It is not an immediate merge: main
+# requires the build check, so the pull request sits until that passes and is dropped if it fails.
+#
+# Two kinds of update are left for a human:
+# - a semver-major one, however it arrived - dependabot.yml ignores majors, but this reads what the
+#   pull request actually updates, so one arriving by a route that file does not cover is not merged
+#   by omission;
+# - a bump of these shared workflows. The build check runs the new build workflow, but nothing on a pull
+#   request runs the new release workflow, so a human dispatches a dry-run release before merging.
+#
+# The calling job must grant `contents: write` and `pull-requests: write`; a called workflow's token
+# can never exceed what its caller gives it. The repository must also have "Allow auto-merge" on.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    name: auto-merge
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ github.token }}
+
+      - if: >-
+          steps.metadata.outputs.update-type != 'version-update:semver-major'
+          && !contains(steps.metadata.outputs.dependency-names, 'lolaf-org/workflows')
+        run: gh pr merge --auto --merge "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,234 @@
+name: maven release
+
+# Cuts a release of a lolaf-org Maven repository with maven-release-plugin and uploads it to the
+# Central Portal. Called from the repository's own workflow_dispatch workflow, which declares the
+# dispatch inputs, owns `concurrency: release`, and passes `secrets: inherit`.
+#
+# What the calling repository must already have, none of which this file can check up front:
+# - maven-release-plugin configured with `releaseProfiles=release`, `useReleaseProfile=false` and an
+#   `<arguments>` ending in `${release.extraArguments}`;
+# - a `release` profile carrying maven-gpg-plugin and central-publishing-maven-plugin;
+# - an HTTPS `developerConnection`, because the credential that pushes is a token;
+# - a CHANGELOG.md with a `## [x.y.z]` section, and its `[x.y.z]:` link definition, for the version;
+# - `enforce_admins` off on main, and a CI_GITHUB_TOKEN whose owner is a repository admin (below).
+
+on:
+  workflow_call:
+    inputs:
+      release-version:
+        description: 'Version to release, without a leading v. Required unless perform-only.'
+        type: string
+        default: ''
+      development-version:
+        description: 'Version to leave main on afterwards. Required unless perform-only.'
+        type: string
+        default: ''
+      dry-run:
+        description: 'Rehearse: build and verify only - no commit, no tag, no push, no upload'
+        type: boolean
+        default: false
+      perform-only:
+        description: 'Skip prepare and deploy an existing tag'
+        type: boolean
+        default: false
+      tag:
+        description: 'Tag to deploy when perform-only (e.g. v0.9.0)'
+        type: string
+        default: ''
+      java-version:
+        description: 'The JDK Maven runs on'
+        type: string
+        default: '21'
+      toolchain-jdks:
+        description: 'Extra JDKs to provision for maven-toolchains, one per line'
+        type: string
+        default: ''
+      timeout-minutes:
+        description: 'Job ceiling. prepare and perform each run a full build.'
+        type: number
+        default: 45
+    secrets:
+      CI_GITHUB_TOKEN:
+        required: true
+      GPG_PRIVATE_KEY:
+        required: true
+      GPG_PASSPHRASE:
+        required: true
+      GPG_KEYNAME:
+        required: true
+      CENTRAL_TOKEN_USERNAME:
+        required: true
+      CENTRAL_TOKEN_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    env:
+      RELEASE_VERSION: ${{ inputs.release-version }}
+      DEVELOPMENT_VERSION: ${{ inputs.development-version }}
+      DRY_RUN: ${{ inputs.dry-run }}
+      PERFORM_ONLY: ${{ inputs.perform-only }}
+      TAG: ${{ inputs.tag }}
+
+    steps:
+      - name: Check the inputs
+        run: |
+          if [ "$PERFORM_ONLY" = "true" ]; then
+            if [ -z "$TAG" ]; then
+              echo "::error::perform-only needs the tag to deploy."
+              exit 1
+            fi
+          elif [ -z "$RELEASE_VERSION" ] || [ -z "$DEVELOPMENT_VERSION" ]; then
+            # Left empty, maven-release-plugin would compute the next version itself - 0.9.1-SNAPSHOT
+            # where 1.0.0-SNAPSHOT was meant - so both are required rather than defaulted.
+            echo "::error::Both releaseVersion and developmentVersion are required unless performOnly."
+            exit 1
+          fi
+
+      # `token` is what makes this workflow able to release at all: it writes the
+      # http.https://github.com/.extraheader credential into the checkout's git config, which is what
+      # maven-release-plugin's `git push` then authenticates with. main requires the build check and
+      # nothing has run it on a commit that does not exist yet, so the push can only land because the
+      # token acts as a repository admin and enforce_admins is off - a fine-grained PAT does, a
+      # GITHUB_TOKEN and a deploy key do not. Protection is enforced at pre-receive, so that is only
+      # ever proven by a real push, per repository; a dry run never pushes.
+      #
+      # fetch-depth: 0 because a push from a shallow clone is refused.
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.CI_GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Check the changelog has a section for this version
+        id: changelog
+        run: |
+          if [ "$PERFORM_ONLY" = "true" ]; then
+            version="${TAG#v}"
+          else
+            version="$RELEASE_VERSION"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          awk -v heading="## [$version]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## /         { exit }
+            found && /^\[[^]]+\]:/  { exit }
+            found                   { print }
+          ' CHANGELOG.md > "$RUNNER_TEMP/release-notes.md"
+
+          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
+            echo "::error::CHANGELOG.md has no non-empty '## [$version]' section. Write one, with its [$version]: link definition, and commit it before releasing."
+            exit 1
+          fi
+          echo "--- release notes for $version ---"
+          cat "$RUNNER_TEMP/release-notes.md"
+
+      - if: inputs.toolchain-jdks != ''
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.toolchain-jdks }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+          gpg-private-key: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Configure the gpg agent and prove signing works
+        env:
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
+        run: |
+          # `required` only proves the secret exists; an empty one would have gpg quietly sign with
+          # whatever its default key is, since this is what becomes -Dgpg.keyname below.
+          if [ -z "$GPG_KEYNAME" ]; then
+            echo "::error::The GPG_KEYNAME secret is empty."
+            exit 1
+          fi
+          {
+            echo "allow-loopback-pinentry"
+            echo "default-cache-ttl 7200"
+            echo "max-cache-ttl 7200"
+          } >> "$GNUPGHOME/gpg-agent.conf"
+          gpg-connect-agent reloadagent /bye
+
+          probe="$RUNNER_TEMP/sign-probe.txt"
+          echo "${GITHUB_REPOSITORY#*/} release signing probe" > "$probe"
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$MAVEN_GPG_PASSPHRASE" \
+              --local-user "$GPG_KEYNAME" \
+              --armor --detach-sign --output "$probe.asc" "$probe"
+          gpg --verify "$probe.asc" "$probe"
+          rm -f "$probe" "$probe.asc"
+          echo "signing works, and the agent now holds the passphrase"
+
+      - name: Identify the release commits
+        run: |
+          git config user.name "${GITHUB_REPOSITORY#*/} release"
+          git config user.email "admin@lolaf.org"
+
+      - name: Prepare the release
+        if: ${{ !inputs.perform-only }}
+        run: |
+          mvn -B release:prepare \
+            "-DreleaseVersion=$RELEASE_VERSION" \
+            "-DdevelopmentVersion=$DEVELOPMENT_VERSION" \
+            "-DdryRun=$DRY_RUN"
+
+      - name: Build, sign and upload the tag to the Portal
+        if: ${{ !inputs.dry-run }}
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+          GPG_KEYNAME: ${{ secrets.GPG_KEYNAME }}
+        run: |
+          # Recovery: prepare pushed and perform then failed, so the tag is real and only the deployment
+          # is missing. perform reads where to check out from release.properties, which is never committed.
+          if [ "$PERFORM_ONLY" = "true" ]; then
+            {
+              echo "completedPhase=end-release"
+              echo "scm.url=scm:git:$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+              echo "scm.tag=$TAG"
+            } > release.properties
+            echo "--- release.properties ---"
+            cat release.properties
+          fi
+          # -Darguments would be silently ignored while the pom sets <arguments>; the property is the way in.
+          mvn -B release:perform "-Drelease.extraArguments=-DskipTests -Dgpg.keyname=$GPG_KEYNAME"
+
+      - name: Create the GitHub Release
+        if: ${{ !inputs.dry-run }}
+        env:
+          GH_TOKEN: ${{ secrets.CI_GITHUB_TOKEN }}
+          VERSION: ${{ steps.changelog.outputs.version }}
+        run: |
+          if [ "$PERFORM_ONLY" = "true" ]; then
+            tag="$TAG"
+          else
+            tag="v$RELEASE_VERSION"
+          fi
+          gh release create "$tag" \
+            --title "${GITHUB_REPOSITORY#*/} $VERSION" \
+            --notes-file "$RUNNER_TEMP/release-notes.md" \
+            --verify-tag
+
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          retention-days: 7
+          if-no-files-found: ignore

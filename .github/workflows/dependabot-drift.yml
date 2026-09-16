@@ -1,0 +1,48 @@
+name: dependabot drift
+
+# dependabot.yml cannot be imported, so each consuming repository keeps its own. This checks that every
+# one of them still contains templates/dependabot-common.yml, reading them anonymously from their public
+# default branches - no credential needed. What a repository adds beyond the template is its own.
+#
+# Not a required check: it reads other repositories' main, so it would block a pull request here for
+# something no commit here can fix. A scheduled failure notifies the repository owner instead.
+#
+# To change the common part: add to the consumers first, then to the template. Removing goes the
+# other way round.
+
+on:
+  schedule:
+    - cron: '17 6 * * 1'
+  push:
+    branches: [ main ]
+    paths:
+      - templates/**
+      - scripts/dependabot-drift.py
+      - .github/workflows/dependabot-drift.yml
+  pull_request:
+    paths:
+      - templates/**
+      - scripts/dependabot-drift.py
+      - .github/workflows/dependabot-drift.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Every consumer's dependabot.yml contains the template
+        run: |
+          pip install --quiet pyyaml==6.0.2
+          python scripts/dependabot-drift.py lolaf-org/ringos lolaf-org/betty lolaf-org/staffix

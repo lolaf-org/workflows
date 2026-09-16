@@ -1,0 +1,14 @@
+version: 2
+
+# Every action the shared workflows use is bumped here, once, rather than in each consuming repository.
+# A bump here reaches the consumers only when a new tag is cut and their own Dependabot picks it up.
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+
+  # actionlint and pyyaml are pinned inside lint.yml and dependabot-drift.yml, where Dependabot does not
+  # look; move them by hand.

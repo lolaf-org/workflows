@@ -1,0 +1,39 @@
+name: lint
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # actionlint runs shellcheck over every `run:` block as well, and the image carries it. The examples
+      # are linted too, since they are what gets copied into the consuming repositories.
+      - name: actionlint
+        run: >-
+          docker run --rm --volume "$PWD:/repo" --workdir /repo
+          rhysd/actionlint:1.7.12 -color
+          .github/workflows/*.yml examples/*.yml
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: The template and the drift script agree with each other
+        run: |
+          pip install --quiet pyyaml==6.0.2
+          python scripts/dependabot-drift.py --self-test
