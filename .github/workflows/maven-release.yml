@@ -181,7 +181,7 @@ jobs:
       - name: Prepare the release
         if: ${{ !inputs.perform-only }}
         run: |
-          mvn -B release:prepare \
+          ./mvnw -B release:prepare \
             "-DreleaseVersion=$RELEASE_VERSION" \
             "-DdevelopmentVersion=$DEVELOPMENT_VERSION" \
             "-DdryRun=$DRY_RUN"
@@ -206,7 +206,7 @@ jobs:
             cat release.properties
           fi
           # -Darguments would be silently ignored while the pom sets <arguments>; the property is the way in.
-          mvn -B release:perform "-Drelease.extraArguments=-DskipTests -Dgpg.keyname=$GPG_KEYNAME"
+          ./mvnw -B release:perform "-Drelease.extraArguments=-DskipTests -Dgpg.keyname=$GPG_KEYNAME"
 
       - name: Create the GitHub Release
         if: ${{ !inputs.dry-run }}

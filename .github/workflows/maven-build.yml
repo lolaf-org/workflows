@@ -65,7 +65,7 @@ jobs:
           BUILD_ARGS: ${{ inputs.maven-args }}
         run: |
           # shellcheck disable=SC2086 # splitting BUILD_ARGS into words is the point
-          mvn $BUILD_ARGS
+          ./mvnw $BUILD_ARGS
 
       - name: Upload surefire reports
         if: failure()
