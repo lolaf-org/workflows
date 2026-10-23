@@ -9,6 +9,7 @@ copy.
 |---|---|
 | [`maven-build.yml`](.github/workflows/maven-build.yml) | `mvn clean install` on push and pull request; surefire reports on failure |
 | [`maven-release.yml`](.github/workflows/maven-release.yml) | `release:prepare` + `release:perform` to the Central Portal, signed, then a GitHub Release from `CHANGELOG.md` |
+| [`maven-snapshot.yml`](.github/workflows/maven-snapshot.yml) | run by hand: `deploy` of the branch's `-SNAPSHOT` to the Central Portal's snapshot repository, unsigned |
 | [`dependabot-auto-merge.yml`](.github/workflows/dependabot-auto-merge.yml) | auto-merge for Dependabot's patch and minor updates, once the build passes |
 
 The callers to copy are in [`examples/`](examples). Each is a few lines apart from `release.yml`'s dispatch
@@ -48,6 +49,7 @@ Dependabot's included, waits forever on a `build` check that no longer reports.
 | `toolchain-jdks` | *empty* | extra JDKs for `maven-toolchains`, one per line; ringos passes `11`, `21`, `25` |
 | `timeout-minutes` | `20` | job ceiling |
 | `maven-args` | `-B -T 1C clean install` | everything after `mvn` |
+| `central-snapshots` | `true` | resolve `-SNAPSHOT` dependencies from the Central Portal's snapshot repository too, where `maven-snapshot.yml` publishes them; releases still come from Maven Central only |
 
 ### `maven-release.yml`
 
@@ -72,6 +74,46 @@ Secrets, all required, passed with `secrets: inherit`:
 
 The calling repository's poms must already carry the release setup this workflow drives: the list is at the top
 of [`maven-release.yml`](.github/workflows/maven-release.yml).
+
+### `maven-snapshot.yml`
+
+Publishing a snapshot is a decision: the caller is a `workflow_dispatch` workflow, run from the branch to publish
+when another repository needs what it has ([`examples/snapshot.yml`](examples/snapshot.yml)). It refuses a
+version that is not a `-SNAPSHOT`, so it cannot publish a release by mistake.
+
+| input | default | |
+|---|---|---|
+| `skip-tests` | `false` | deploy with `-DskipTests`, when CI already passed on that commit |
+| `extra-maven-args` | *empty* | added to `-B -P release deploy -Dgpg.skip`, e.g. `-T1C` or a profile to turn off |
+| `java-version`, `toolchain-jdks` | as above | |
+| `timeout-minutes` | `45` | a full build unless `skip-tests` |
+
+Secrets `CENTRAL_TOKEN_USERNAME` and `CENTRAL_TOKEN_PASSWORD`, as for a release; nothing to sign, since Central
+neither validates nor requires signatures on snapshots. SNAPSHOTs must be enabled for the namespace in the Central
+Portal, and the `release` profile's `excludeArtifacts` keep those modules out of snapshots as well. Central deletes
+snapshots after 90 days: a consumer whose snapshot is older needs it published again.
+
+A repository building through `maven-build.yml` resolves them with no change to its poms. To do the same
+locally, add to `~/.m2/settings.xml`:
+
+```xml
+<profiles>
+  <profile>
+    <id>central-portal-snapshots</id>
+    <repositories>
+      <repository>
+        <id>central-portal-snapshots</id>
+        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <releases><enabled>false</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
+      </repository>
+    </repositories>
+  </profile>
+</profiles>
+<activeProfiles>
+  <activeProfile>central-portal-snapshots</activeProfile>
+</activeProfiles>
+```
 
 ### `dependabot-auto-merge.yml`
 

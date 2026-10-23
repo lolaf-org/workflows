@@ -1,0 +1,110 @@
+name: maven snapshot
+
+# Deploys the current -SNAPSHOT of a lolaf-org Maven repository to the Central Portal's snapshot repository,
+# https://central.sonatype.com/repository/maven-snapshots/, which anyone reads without credentials. Called
+# from the repository's own workflow_dispatch workflow, so publishing a snapshot is always someone's decision;
+# the caller owns `concurrency` and passes `secrets: inherit`. The branch is the one picked when dispatching.
+#
+# What the calling repository must already have:
+# - a `release` profile carrying central-publishing-maven-plugin (0.7.0 or newer), whose `excludeArtifacts`
+#   also keep those modules out of the snapshots;
+# - SNAPSHOTs enabled for its namespace in the Central Portal.
+#
+# Snapshots are neither validated nor signed by Central, so no GPG secret is needed, and Central deletes them
+# after 90 days.
+
+on:
+  workflow_call:
+    inputs:
+      skip-tests:
+        description: 'Deploy without running the tests, when CI already passed on this commit'
+        type: boolean
+        default: false
+      extra-maven-args:
+        description: 'Arguments added to the deploy command line, e.g. -T1C or a profile to turn off'
+        type: string
+        default: ''
+      java-version:
+        description: 'The JDK Maven runs on'
+        type: string
+        default: '21'
+      toolchain-jdks:
+        description: 'Extra JDKs to provision for maven-toolchains, one per line'
+        type: string
+        default: ''
+      timeout-minutes:
+        description: 'Job ceiling, a full build included unless skip-tests.'
+        type: number
+        default: 45
+    secrets:
+      CENTRAL_TOKEN_USERNAME:
+        required: true
+      CENTRAL_TOKEN_PASSWORD:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  snapshot:
+    name: snapshot
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.timeout-minutes }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - if: inputs.toolchain-jdks != ''
+        uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.toolchain-jdks }}
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: zulu
+          java-version: ${{ inputs.java-version }}
+          cache: maven
+          server-id: central
+          server-username: CENTRAL_TOKEN_USERNAME
+          server-password: CENTRAL_TOKEN_PASSWORD
+
+      # A release version would go through the plugin's release path and upload a Portal deployment.
+      - name: Check the version is a snapshot
+        id: version
+        run: |
+          version=$(./mvnw -B -q -N help:evaluate -Dexpression=project.version -DforceStdout)
+          case "$version" in
+            *-SNAPSHOT) echo "version=$version" >> "$GITHUB_OUTPUT"; echo "deploying $version" ;;
+            *) echo "::error::$GITHUB_REF_NAME is on $version, not a -SNAPSHOT: release it with the release workflow."; exit 1 ;;
+          esac
+
+      - name: Build and deploy the snapshot
+        env:
+          CENTRAL_TOKEN_USERNAME: ${{ secrets.CENTRAL_TOKEN_USERNAME }}
+          CENTRAL_TOKEN_PASSWORD: ${{ secrets.CENTRAL_TOKEN_PASSWORD }}
+          SKIP_TESTS: ${{ inputs.skip-tests }}
+          EXTRA_ARGS: ${{ inputs.extra-maven-args }}
+        run: |
+          tests=""
+          if [ "$SKIP_TESTS" = "true" ]; then
+            tests="-DskipTests"
+          fi
+          # shellcheck disable=SC2086 # the extra arguments are split on purpose
+          ./mvnw -B -P release deploy -Dgpg.skip $tests $EXTRA_ARGS
+
+      - name: Say where it went
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          echo "### ${GITHUB_REPOSITORY#*/} $VERSION deployed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Resolve it from https://central.sonatype.com/repository/maven-snapshots/ (snapshots enabled, releases disabled)." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload surefire reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/**'
+          retention-days: 7
+          if-no-files-found: ignore

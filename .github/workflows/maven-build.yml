@@ -30,6 +30,12 @@ on:
         description: 'The whole mvn command line after `mvn`'
         type: string
         default: '-B -T 1C clean install'
+      central-snapshots:
+        description: >-
+          Resolve -SNAPSHOT dependencies from the Central Portal's snapshot repository, where
+          maven-snapshot.yml publishes them. Releases still come from Maven Central only.
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -58,6 +64,39 @@ jobs:
           distribution: zulu
           java-version: ${{ inputs.java-version }}
           cache: maven
+
+      # setup-java's settings.xml only declares a deploy server, which a build never uses, so this replaces it.
+      # updatePolicy always: the restored Maven cache would otherwise keep a day-old snapshot after a new one
+      # is published.
+      - name: Resolve snapshots from the Central Portal
+        if: inputs.central-snapshots
+        run: |
+          mkdir -p ~/.m2
+          cat > ~/.m2/settings.xml <<'SETTINGS'
+          <settings>
+            <profiles>
+              <profile>
+                <id>central-portal-snapshots</id>
+                <repositories>
+                  <repository>
+                    <id>central-portal-snapshots</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                      <enabled>false</enabled>
+                    </releases>
+                    <snapshots>
+                      <enabled>true</enabled>
+                      <updatePolicy>always</updatePolicy>
+                    </snapshots>
+                  </repository>
+                </repositories>
+              </profile>
+            </profiles>
+            <activeProfiles>
+              <activeProfile>central-portal-snapshots</activeProfile>
+            </activeProfiles>
+          </settings>
+          SETTINGS
 
       # Not MAVEN_ARGS: Maven 3.9 reads that variable itself and would apply the arguments twice.
       - name: Build and test
