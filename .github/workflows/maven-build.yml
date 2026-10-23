@@ -66,6 +66,7 @@ jobs:
           cache: maven
 
       # setup-java's settings.xml only declares a deploy server, which a build never uses, so this replaces it.
+      # A plugin is resolved from pluginRepositories only, hence the repository twice.
       # updatePolicy always: the restored Maven cache would otherwise keep a day-old snapshot after a new one
       # is published.
       - name: Resolve snapshots from the Central Portal
@@ -90,6 +91,19 @@ jobs:
                     </snapshots>
                   </repository>
                 </repositories>
+                <pluginRepositories>
+                  <pluginRepository>
+                    <id>central-portal-snapshots</id>
+                    <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+                    <releases>
+                      <enabled>false</enabled>
+                    </releases>
+                    <snapshots>
+                      <enabled>true</enabled>
+                      <updatePolicy>always</updatePolicy>
+                    </snapshots>
+                  </pluginRepository>
+                </pluginRepositories>
               </profile>
             </profiles>
             <activeProfiles>

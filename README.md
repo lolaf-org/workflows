@@ -108,6 +108,14 @@ locally, add to `~/.m2/settings.xml`:
         <snapshots><enabled>true</enabled></snapshots>
       </repository>
     </repositories>
+    <pluginRepositories>
+      <pluginRepository>
+        <id>central-portal-snapshots</id>
+        <url>https://central.sonatype.com/repository/maven-snapshots/</url>
+        <releases><enabled>false</enabled></releases>
+        <snapshots><enabled>true</enabled></snapshots>
+      </pluginRepository>
+    </pluginRepositories>
   </profile>
 </profiles>
 <activeProfiles>
